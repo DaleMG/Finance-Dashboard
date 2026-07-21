@@ -214,6 +214,31 @@ def update_transaction(transaction_id, date, merchant, amount, category_id=None,
     conn.close()
 
 
+def update_transactions_category(transaction_ids, category_id):
+    """Update the category for multiple transactions."""
+    if not transaction_ids:
+        return 0
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.executemany(
+        """
+        UPDATE transactions
+        SET category_id = ?
+        WHERE id = ?
+        """,
+        [(category_id, transaction_id) for transaction_id in transaction_ids],
+    )
+
+    updated_count = len(transaction_ids)
+
+    conn.commit()
+    conn.close()
+
+    return updated_count
+
+
 def delete_transaction(transaction_id):
     """Delete a transaction by id."""
     conn = get_connection()
