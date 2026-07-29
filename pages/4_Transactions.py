@@ -138,8 +138,8 @@ else:
                 st.rerun()
 
         if action_col_3.button("Delete selected"):
-            if single_selected_transaction is None:
-                st.warning("Select exactly one transaction to delete.")
+            if not selected_transaction_ids:
+                st.warning("Select one or more transactions from the table first.")
             else:
                 st.session_state["transactions_action"] = "delete"
                 st.rerun()
@@ -228,19 +228,40 @@ else:
                         st.success("Transaction updated.")
                         st.rerun()
 
-        if action == "delete" and single_selected_transaction is not None:
-            st.subheader("Delete Selected Transaction")
-            st.write(
-                f"Delete `{single_selected_transaction[2]}` on `{single_selected_transaction[1]}` "
-                f"for `${float(single_selected_transaction[3]):.2f}`?"
-            )
+        if action == "delete" and active_transactions:
+            st.subheader("Delete Selected Transaction(s)")
+
+            if len(active_transactions) == 1:
+                transaction = active_transactions[0]
+                st.write(
+                    f"Delete `{transaction[2]}` on `{transaction[1]}` "
+                    f"for `${float(transaction[3]):.2f}`?"
+                )
+            else:
+                st.write(f"Delete the {len(active_transactions)} selected transactions?")
+                preview_rows = []
+                for transaction in active_transactions:
+                    preview_rows.append(
+                        {
+                            "Date": transaction[1],
+                            "Merchant": transaction[2],
+                            "Amount": float(transaction[3]),
+                        }
+                    )
+                st.dataframe(
+                    pd.DataFrame(preview_rows),
+                    width="stretch",
+                    hide_index=True,
+                    height=320,
+                )
 
             confirm_col_1, confirm_col_2 = st.columns(2)
 
             if confirm_col_1.button("Confirm delete"):
-                delete_transaction(single_selected_transaction[0])
+                for transaction in active_transactions:
+                    delete_transaction(transaction[0])
                 clear_transaction_state()
-                st.success("Transaction deleted.")
+                st.success("Transaction(s) deleted.")
                 st.rerun()
 
             if confirm_col_2.button("Cancel"):

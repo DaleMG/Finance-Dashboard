@@ -109,6 +109,61 @@ def delete_category(category_id):
     conn.close()
 
 
+def get_merchant_rules():
+    """Return all saved merchant-to-category rules."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT merchant_rules.merchant, merchant_rules.category_id, categories.name
+        FROM merchant_rules
+        INNER JOIN categories ON merchant_rules.category_id = categories.id
+        ORDER BY merchant_rules.merchant
+    """)
+
+    merchant_rules = cursor.fetchall()
+
+    conn.close()
+
+    return merchant_rules
+
+
+def get_merchant_rule(merchant):
+    """Return the saved category for a merchant, if any."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT merchant_rules.merchant, merchant_rules.category_id, categories.name
+        FROM merchant_rules
+        INNER JOIN categories ON merchant_rules.category_id = categories.id
+        WHERE LOWER(merchant_rules.merchant) = LOWER(?)
+        LIMIT 1
+    """, (merchant.strip(),))
+
+    merchant_rule = cursor.fetchone()
+
+    conn.close()
+
+    return merchant_rule
+
+
+def upsert_merchant_rule(merchant, category_id):
+    """Create or update a merchant-to-category rule."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO merchant_rules (merchant, category_id)
+        VALUES (?, ?)
+        ON CONFLICT(merchant)
+        DO UPDATE SET category_id = excluded.category_id
+    """, (merchant.strip(), category_id))
+
+    conn.commit()
+    conn.close()
+
+
 def add_transaction(date, merchant, amount, category_id=None, notes=None):
     """Insert a single transaction and return the new row id."""
     conn = get_connection()
@@ -197,6 +252,29 @@ def get_transactions(search_text=None, category_id=None):
     conn.close()
 
     return transactions
+
+
+def get_transaction_signatures():
+    """Return normalized signatures for existing transactions."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            date,
+            LOWER(TRIM(merchant)) AS normalized_merchant,
+            ROUND(amount, 2) AS rounded_amount
+        FROM transactions
+    """)
+
+    signatures = {
+        (row[0], row[1], float(row[2]))
+        for row in cursor.fetchall()
+    }
+
+    conn.close()
+
+    return signatures
 
 
 def update_transaction(transaction_id, date, merchant, amount, category_id=None, notes=None):
@@ -302,17 +380,54 @@ def delete_budget(budget_id):
     conn.close()
 
 
-def get_dashboard_summary():
-    """Return high-level spending and budget totals for the dashboard."""
+def get_category_spending():
+    """Return total spending by category for the dashboard."""
+    return get_category_spending_by_date_range()
+
+
+def get_transaction_date_bounds():
+    """Return the earliest and latest transaction dates currently stored."""
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
+        SELECT MIN(date), MAX(date)
+        FROM transactions
+    """)
+
+    date_bounds = cursor.fetchone()
+
+    conn.close()
+
+    return {
+        "start_date": date_bounds[0],
+        "end_date": date_bounds[1],
+    }
+
+
+def get_dashboard_summary(start_date=None, end_date=None):
+    """Return high-level spending and budget totals for the dashboard."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = """
         SELECT
             COUNT(*) AS transaction_count,
             COALESCE(SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END), 0) AS total_spending
         FROM transactions
-    """)
+        WHERE 1 = 1
+    """
+    parameters = []
+
+    if start_date is not None:
+        query += " AND date >= ?"
+        parameters.append(start_date)
+
+    if end_date is not None:
+        query += " AND date <= ?"
+        parameters.append(end_date)
+
+    cursor.execute(query, parameters)
     transaction_summary = cursor.fetchone()
 
     cursor.execute("""
@@ -335,21 +450,35 @@ def get_dashboard_summary():
     }
 
 
-def get_category_spending():
-    """Return total spending by category for the dashboard."""
+def get_category_spending_by_date_range(start_date=None, end_date=None):
+    """Return total spending by category, optionally filtered by date range."""
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    query = """
         SELECT
             COALESCE(categories.name, 'Uncategorized') AS category_name,
             COALESCE(SUM(ABS(transactions.amount)), 0) AS total_spending
         FROM transactions
         LEFT JOIN categories ON transactions.category_id = categories.id
         WHERE transactions.amount < 0
+    """
+    parameters = []
+
+    if start_date is not None:
+        query += " AND transactions.date >= ?"
+        parameters.append(start_date)
+
+    if end_date is not None:
+        query += " AND transactions.date <= ?"
+        parameters.append(end_date)
+
+    query += """
         GROUP BY COALESCE(categories.name, 'Uncategorized')
         ORDER BY total_spending DESC, category_name
-    """)
+    """
+
+    cursor.execute(query, parameters)
 
     category_spending = cursor.fetchall()
 
