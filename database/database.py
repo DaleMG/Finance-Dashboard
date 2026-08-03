@@ -485,3 +485,78 @@ def get_category_spending_by_date_range(start_date=None, end_date=None):
     conn.close()
 
     return category_spending
+
+
+def get_transactions_for_rag(search_terms=None, category_ids=None, start_date=None, end_date=None, limit=25):
+    """Return a small, relevant set of transactions for assistant retrieval."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT
+            transactions.id,
+            transactions.date,
+            transactions.merchant,
+            transactions.amount,
+            transactions.category_id,
+            transactions.notes,
+            COALESCE(categories.name, 'Uncategorized') AS category_name
+        FROM transactions
+        LEFT JOIN categories ON transactions.category_id = categories.id
+        WHERE 1 = 1
+    """
+    parameters = []
+
+    if start_date is not None:
+        query += " AND transactions.date >= ?"
+        parameters.append(start_date)
+
+    if end_date is not None:
+        query += " AND transactions.date <= ?"
+        parameters.append(end_date)
+
+    if category_ids:
+        valid_category_ids = [category_id for category_id in category_ids if category_id is not None]
+
+        if valid_category_ids:
+            placeholders = ", ".join("?" for _ in valid_category_ids)
+            query += f" AND transactions.category_id IN ({placeholders})"
+            parameters.extend(valid_category_ids)
+
+    if search_terms:
+        search_clauses = []
+
+        for search_term in search_terms:
+            normalized_search_term = search_term.strip().lower()
+
+            if len(normalized_search_term) < 2:
+                continue
+
+            search_clauses.append(
+                """
+                (
+                    LOWER(transactions.merchant) LIKE ?
+                    OR LOWER(COALESCE(transactions.notes, '')) LIKE ?
+                    OR LOWER(COALESCE(categories.name, '')) LIKE ?
+                )
+                """
+            )
+            like_value = f"%{normalized_search_term}%"
+            parameters.extend([like_value, like_value, like_value])
+
+        if search_clauses:
+            query += " AND (" + " OR ".join(search_clauses) + ")"
+
+    query += """
+        ORDER BY transactions.date DESC, transactions.id DESC
+        LIMIT ?
+    """
+    parameters.append(limit)
+
+    cursor.execute(query, parameters)
+
+    transactions = cursor.fetchall()
+
+    conn.close()
+
+    return transactions

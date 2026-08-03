@@ -5,8 +5,6 @@ from services.gemini_assistant import ask_gemini_assistant, build_finance_contex
 st.title("AI Assistant")
 st.write("Ask questions about your spending, budgets, and categories.")
 
-st.caption("This assistant uses your current local database snapshot and only answers from that data.")
-
 api_key = get_gemini_api_key(getattr(st, "secrets", None))
 
 if not api_key:
