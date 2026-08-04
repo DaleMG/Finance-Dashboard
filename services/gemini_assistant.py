@@ -9,6 +9,8 @@ from datetime import date, timedelta
 from typing import Any
 
 from database.database import (
+    get_cash_flow_monthly_totals,
+    get_cash_flow_records,
     get_budgets,
     get_categories,
     get_category_spending_by_date_range,
@@ -23,10 +25,14 @@ You are a careful personal finance assistant for a local-first budgeting app.
 
 Rules:
 - Use only the finance context provided below, including the retrieved SQLite records.
+- The finance context may include cash flow records for income, bills, and savings.
 - Do not invent transactions, categories, or budget values.
 - For spending questions, treat negative amounts as spending and positive amounts as income or transfers.
 - If the data is insufficient to answer exactly, say so clearly.
 - Keep the answer concise, practical, and specific.
+- Write in plain, natural, conversational sentences, like you're talking to a person.
+- Do not use markdown, bullet points, asterisks, hashes, or other formatting symbols.
+- Always write in complete sentences and make sure your response ends on a finished sentence.
 """.strip()
 
 STOP_WORDS = {
@@ -103,6 +109,7 @@ def build_finance_context(question: str) -> dict[str, Any]:
     start_date, end_date, date_label = infer_date_range(question)
     category_matches = find_matching_categories(question)
     search_terms = extract_search_terms(question)
+    cash_flow_sections = infer_cash_flow_sections(question)
 
     summary = get_dashboard_summary(start_date=start_date, end_date=end_date)
     category_spending = get_category_spending_by_date_range(start_date=start_date, end_date=end_date)
@@ -134,6 +141,32 @@ def build_finance_context(question: str) -> dict[str, Any]:
             limit=15,
         )
 
+    cash_flow_context = {}
+    for section_type in cash_flow_sections:
+        records = get_cash_flow_records(section_type)
+        cash_flow_context[section_type] = {
+            "monthly_totals": [
+                {
+                    "month": month_key,
+                    "total": float(total_amount),
+                }
+                for month_key, total_amount in get_cash_flow_monthly_totals(section_type)
+            ],
+            "recent_records": [
+                {
+                    "id": record[0],
+                    "type": record[2],
+                    "label": record[3],
+                    "amount": float(record[4]),
+                    "start_date": record[5],
+                    "end_date": record[6],
+                    "frequency": record[7],
+                    "created_at": record[8],
+                }
+                for record in records[:15]
+            ],
+        }
+
     return {
         "retrieval": {
             "date_range": {
@@ -146,7 +179,9 @@ def build_finance_context(question: str) -> dict[str, Any]:
         },
         "summary": {
             "transaction_count": int(summary["transaction_count"]),
+            "total_income": float(summary["total_income"]),
             "total_spending": float(summary["total_spending"]),
+            "net": float(summary["net"]),
             "total_budget": float(summary["total_budget"]),
             "remaining_budget": float(summary["remaining_budget"]),
         },
@@ -176,6 +211,7 @@ def build_finance_context(question: str) -> dict[str, Any]:
             }
             for transaction in relevant_transactions
         ],
+        "cash_flow": cash_flow_context,
         "question_focus": question.strip(),
     }
 
@@ -275,9 +311,53 @@ def find_matching_categories(question: str) -> list[dict[str, Any]]:
     return matched_categories
 
 
+def infer_cash_flow_sections(question: str) -> list[str]:
+    """Return the cash-flow sections that are most relevant to the question."""
+    normalized_question = normalize_question(question)
+
+    section_keywords = {
+        "income": ["income", "salary", "wage", "paycheck", "pay", "revenue", "job"],
+        "bills": ["bill", "bills", "rent", "utilities", "utility", "power", "water", "internet", "phone"],
+        "savings": ["saving", "savings", "investment", "investments", "invest", "emergency fund", "contribution"],
+    }
+
+    matched_sections = []
+    for section_type, keywords in section_keywords.items():
+        if any(keyword in normalized_question for keyword in keywords):
+            matched_sections.append(section_type)
+
+    if matched_sections:
+        return matched_sections
+
+    return ["income", "bills", "savings"]
+
+
 def format_finance_context(finance_context: dict[str, Any]) -> str:
     """Serialize finance context for the prompt."""
     return json.dumps(finance_context, indent=2, ensure_ascii=False)
+
+
+SENTENCE_END_CHARACTERS = (".", "!", "?", '"', "'")
+
+
+def clean_answer_text(answer: str) -> str:
+    """Strip markdown symbols and trim any dangling, unfinished final sentence."""
+    text = answer.strip()
+
+    # Drop common markdown formatting characters.
+    text = re.sub(r"[*_#`]+", "", text)
+    # Collapse leading list markers like "- " or "1. " at line starts.
+    text = re.sub(r"(?m)^\s*(?:[-•]|\d+\.)\s+", "", text)
+    # Normalize excess blank lines/whitespace left behind.
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+
+    if text and not text.endswith(SENTENCE_END_CHARACTERS):
+        last_end = max(text.rfind(char) for char in SENTENCE_END_CHARACTERS)
+        if last_end != -1:
+            text = text[: last_end + 1].strip()
+
+    return text
 
 
 def get_gemini_api_key(secrets: Any | None = None) -> str | None:
@@ -328,7 +408,7 @@ def ask_gemini_assistant(
         contents=prompt,
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
-            max_output_tokens=512,
+            max_output_tokens=1024,
         ),
     )
 
@@ -336,4 +416,4 @@ def ask_gemini_assistant(
     if not answer:
         raise RuntimeError("The model returned no text response.")
 
-    return answer
+    return clean_answer_text(answer)

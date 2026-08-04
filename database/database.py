@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import date
 
 DB_NAME = "database/budget.db"
 
@@ -49,6 +50,38 @@ def initialize_database():
             FOREIGN KEY (category_id) REFERENCES categories(id)
         )
     """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cash_flow_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            entry_type TEXT NOT NULL,
+            label TEXT NOT NULL,
+            amount REAL NOT NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cash_flow_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            section_type TEXT NOT NULL,
+            entry_kind TEXT NOT NULL,
+            label TEXT NOT NULL,
+            amount REAL NOT NULL,
+            start_date TEXT,
+            end_date TEXT,
+            frequency TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("PRAGMA table_info(transactions)")
+    existing_transaction_columns = {row[1] for row in cursor.fetchall()}
+
+    if "cash_flow_record_id" not in existing_transaction_columns:
+        cursor.execute("""
+            ALTER TABLE transactions
+            ADD COLUMN cash_flow_record_id INTEGER REFERENCES cash_flow_records(id)
+        """)
 
     conn.commit()
     conn.close()
@@ -380,6 +413,237 @@ def delete_budget(budget_id):
     conn.close()
 
 
+def add_cash_flow_entry(entry_type, label, amount):
+    """Add a simple cash flow entry for the income, bills, or savings pages."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO cash_flow_entries (entry_type, label, amount)
+        VALUES (?, ?, ?)
+    """, (entry_type, label.strip(), amount))
+
+    conn.commit()
+    conn.close()
+
+
+def get_cash_flow_entries(entry_type):
+    """Return saved cash flow entries for a given section."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT id, entry_type, label, amount
+        FROM cash_flow_entries
+        WHERE entry_type = ?
+        ORDER BY id DESC
+    """, (entry_type,))
+
+    cash_flow_entries = cursor.fetchall()
+
+    conn.close()
+
+    return cash_flow_entries
+
+
+def delete_cash_flow_entry(entry_id):
+    """Delete a cash flow entry by id."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        DELETE FROM cash_flow_entries
+        WHERE id = ?
+    """, (entry_id,))
+
+    conn.commit()
+    conn.close()
+
+
+def add_cash_flow_record(section_type, entry_kind, label, amount, start_date=None, end_date=None, frequency=None):
+    """Insert a cash flow record for income, bills, or savings."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO cash_flow_records (
+            section_type,
+            entry_kind,
+            label,
+            amount,
+            start_date,
+            end_date,
+            frequency
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        section_type,
+        entry_kind,
+        label.strip(),
+        amount,
+        start_date,
+        end_date,
+        frequency,
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+def get_cash_flow_records(section_type):
+    """Return all saved cash flow records for a section."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            id,
+            section_type,
+            entry_kind,
+            label,
+            amount,
+            start_date,
+            end_date,
+            frequency,
+            created_at
+        FROM cash_flow_records
+        WHERE section_type = ?
+        ORDER BY id DESC
+    """, (section_type,))
+
+    cash_flow_records = cursor.fetchall()
+
+    conn.close()
+
+    return cash_flow_records
+
+
+def delete_cash_flow_record(record_id):
+    """Delete a cash flow record by id."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        DELETE FROM cash_flow_records
+        WHERE id = ?
+    """, (record_id,))
+
+    conn.commit()
+    conn.close()
+
+
+def get_cash_flow_grid(section_type, year):
+    """Return {(entry_kind, month_number): amount} for a section's saved entries in a year."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT entry_kind, start_date, amount
+        FROM cash_flow_records
+        WHERE section_type = ? AND start_date LIKE ?
+    """, (section_type, f"{year:04d}-%"))
+
+    grid = {
+        (entry_kind, int(start_date[5:7])): float(amount)
+        for entry_kind, start_date, amount in cursor.fetchall()
+    }
+
+    conn.close()
+
+    return grid
+
+
+def save_cash_flow_entry(section_type, entry_kind, year, month, amount):
+    """Replace the cash flow record (and mirrored transaction) for one entry/month.
+
+    Always clears any existing record for this section/entry/month first, so
+    re-saving the same cell never creates duplicates. Passing amount=0 clears the cell.
+    The mirrored transaction's category is resolved (or created) from entry_kind, so
+    cash flow entries show up as categorized history on the Transactions page.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    month_prefix = f"{year:04d}-{month:02d}"
+
+    cursor.execute("""
+        SELECT id FROM cash_flow_records
+        WHERE section_type = ? AND entry_kind = ? AND start_date LIKE ?
+    """, (section_type, entry_kind, f"{month_prefix}%"))
+    stale_record_ids = [row[0] for row in cursor.fetchall()]
+
+    if stale_record_ids:
+        placeholders = ", ".join("?" for _ in stale_record_ids)
+        cursor.execute(
+            f"DELETE FROM transactions WHERE cash_flow_record_id IN ({placeholders})",
+            stale_record_ids,
+        )
+        cursor.execute(
+            f"DELETE FROM cash_flow_records WHERE id IN ({placeholders})",
+            stale_record_ids,
+        )
+
+    if amount != 0:
+        entry_date = date(year, month, 1).isoformat()
+
+        cursor.execute("""
+            INSERT INTO cash_flow_records (section_type, entry_kind, label, amount, start_date)
+            VALUES (?, ?, ?, ?, ?)
+        """, (section_type, entry_kind, entry_kind, amount, entry_date))
+        record_id = cursor.lastrowid
+
+        cursor.execute("SELECT id FROM categories WHERE LOWER(name) = LOWER(?)", (entry_kind,))
+        existing_category = cursor.fetchone()
+
+        if existing_category is not None:
+            category_id = existing_category[0]
+        else:
+            cursor.execute("INSERT INTO categories (name) VALUES (?)", (entry_kind,))
+            category_id = cursor.lastrowid
+
+        cursor.execute("""
+            INSERT INTO transactions (date, merchant, amount, category_id, notes, cash_flow_record_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            entry_date,
+            entry_kind,
+            amount,
+            category_id,
+            f"{section_type.capitalize()} cash flow entry",
+            record_id,
+        ))
+
+    conn.commit()
+    conn.close()
+
+
+def get_cash_flow_monthly_totals(section_type):
+    """Return month-by-month totals for the current calendar year."""
+    records = get_cash_flow_records(section_type)
+    monthly_totals = {month: 0.0 for month in range(1, 13)}
+    current_year = date.today().year
+
+    for record in records:
+        amount = float(record[4])
+        start_date = record[5]
+        created_at = record[8]
+
+        source_date = start_date or created_at
+        if not source_date:
+            continue
+
+        year_part, month_part = str(source_date)[:7].split("-")
+        if int(year_part) != current_year:
+            continue
+
+        monthly_totals[int(month_part)] += amount
+
+    return [
+        (date(current_year, month_number, 1).strftime("%b"), round(total_amount, 2))
+        for month_number, total_amount in monthly_totals.items()
+    ]
+
+
 def get_category_spending():
     """Return total spending by category for the dashboard."""
     return get_category_spending_by_date_range()
@@ -413,6 +677,7 @@ def get_dashboard_summary(start_date=None, end_date=None):
     query = """
         SELECT
             COUNT(*) AS transaction_count,
+            COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) AS total_income,
             COALESCE(SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END), 0) AS total_spending
         FROM transactions
         WHERE 1 = 1
@@ -439,12 +704,15 @@ def get_dashboard_summary(start_date=None, end_date=None):
     conn.close()
 
     transaction_count = transaction_summary[0]
-    total_spending = float(transaction_summary[1])
+    total_income = float(transaction_summary[1])
+    total_spending = float(transaction_summary[2])
     total_budget = float(budget_summary[0])
 
     return {
         "transaction_count": transaction_count,
+        "total_income": total_income,
         "total_spending": total_spending,
+        "net": total_income - total_spending,
         "total_budget": total_budget,
         "remaining_budget": total_budget - total_spending,
     }

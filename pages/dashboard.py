@@ -28,6 +28,20 @@ def get_previous_month_range(selected_date):
     return previous_month_start, previous_month_end
 
 
+def render_net_metric(column, net):
+    """Render the Net metric with the value colored green (>=0) or red (<0)."""
+    color = "#22c55e" if net >= 0 else "#ef4444"
+    column.markdown(
+        f"""
+        <div style="display:flex;flex-direction:column;gap:0.25rem;">
+            <div style="font-size:0.875rem;color:rgba(128,128,128,0.9);">Net</div>
+            <div style="font-size:1.75rem;font-weight:600;color:{color};">${net:,.2f}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def resolve_timeframe(option, current_month_start, today, date_bounds, custom_range):
     """Return the start and end dates for the selected dashboard timeframe."""
     if option == "Last 7 days":
@@ -54,6 +68,11 @@ def resolve_timeframe(option, current_month_start, today, date_bounds, custom_ra
 
     return current_month_start, today
 
+def format_net(net):
+    if net >= 0:
+        return f":green[${net:,.2f}]"
+    elif net < 0:
+        return f":red[${net:,.2f}]"
 
 st.set_page_config(
     page_title="Dashboard | Budgeting App",
@@ -113,26 +132,11 @@ budgets = get_budgets()
 
 st.caption(f"Showing {timeframe_option.lower()} from {start_date.isoformat()} to {end_date.isoformat()}.")
 
-if is_current_month:
-
-    rem_budget = selected_summary['remaining_budget']
-
-    if rem_budget >= 0:
-        colored_value = f":green[${rem_budget:,.2f}]"
-    else:
-        colored_value = f":red[${rem_budget:,.2f}]"
-
-
-
-    metric_col_1, metric_col_2, metric_col_3, metric_col_4 = st.columns(4)
-    metric_col_1.metric("Total Spending", f"${selected_summary['total_spending']:.2f}")
-    metric_col_2.metric("Total Budget", f"${selected_summary['total_budget']:.2f}")
-    metric_col_3.metric("Remaining Budget", colored_value)   
-    metric_col_4.metric("Transactions", selected_summary["transaction_count"])
-else:
-    metric_col_1, metric_col_2 = st.columns(2)
-    metric_col_1.metric("Total Spending", f"${selected_summary['total_spending']:.2f}")
-    metric_col_2.metric("Transactions", selected_summary["transaction_count"])
+metric_col_1, metric_col_2, metric_col_3, metric_col_4 = st.columns(4)
+metric_col_1.metric("Income", f"${selected_summary['total_income']:.2f}")
+metric_col_2.metric("Spend", f"${selected_summary['total_spending']:.2f}")
+metric_col_3.metric("Net", format_net(selected_summary["net"]))
+metric_col_4.metric("Transactions", selected_summary["transaction_count"])
 
 if is_current_month:
     category_rows = []

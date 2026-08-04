@@ -7,17 +7,75 @@ st.set_page_config(
     page_title="Budgeting App"
 )
 
-st.title("Home")
-st.write("Welcome to your personal budgeting dashboard.")
-
-st.subheader("How to use the app")
-st.markdown(
-    """
-    1. **Check Categories** to add or remove spending groups.
-    2. **Set Budgets** for each category.
-    3. **Upload** your CSV bank statement first.
-    4. **Review Transactions** to edit, delete, or re-categorize entries.
-    5. **Open the Dashboard** to see spending summaries and charts.
-    6. **Use the AI Assistant** to ask questions about your finances.
-    """
+# Pages
+dashboard = st.Page(
+    "pages/dashboard.py",
+    title="Dashboard",
+    default=True
 )
+
+budgets = st.Page(
+    "pages/budgets.py",
+    title="Budgets",
+)
+
+categories = st.Page(
+    "pages/categories.py",
+    title="Categories",
+)
+
+transactions = st.Page(
+    "pages/transactions.py",
+    title="Transactions",
+)
+
+assistant = st.Page(
+    "pages/ai_assistant.py",
+    title="AI Assistant",
+)
+
+upload = st.Page(
+    "pages/upload.py",
+    title="Upload",
+)
+
+income = st.Page(
+    "pages/income.py",
+    title="Income",
+)
+
+savings = st.Page(
+    "pages/savings.py",
+    title="Savings & Investments",
+)
+
+bills = st.Page(
+    "pages/bills.py",
+    title="Bills",
+)
+
+pg = st.navigation(
+    {
+        "Overview": [
+            dashboard,
+        ],
+        "Cash Flow": [
+            income,
+            bills,
+            savings,
+        ],
+        "Budgeting": [
+            budgets,
+            categories,
+        ],
+        "Activity": [
+            transactions,
+            upload,
+        ],
+        "Tools": [
+            assistant,
+        ],
+    }
+)
+
+pg.run()

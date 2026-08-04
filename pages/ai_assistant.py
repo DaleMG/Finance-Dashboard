@@ -40,4 +40,23 @@ if ask_button:
             st.error(f"AI assistant request failed: {error}")
         else:
             st.subheader("Answer")
-            st.write(answer)
+            st.markdown(
+                """
+                <style>
+                textarea:disabled {
+                    color: #000000 !important;
+                    -webkit-text-fill-color: #000000 !important;
+                    opacity: 1 !important;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.text_area(
+                "Answer",
+                value=answer,
+                height=200,
+                disabled=True,
+                label_visibility="collapsed",
+                key="gemini_assistant_answer",
+            )
